@@ -17,21 +17,14 @@ import (
 )
 
 var AndroidAlgorithms = []string{
-	"Gez0T9ijiI9WCeTsKSg3SMlx",
-	"zQdbalsolyb1R/",
-	"ftOjr52zt51JD68C3s",
-	"yeOBMH0JkbQdEFNNwQ0RI9T3wU/v",
-	"BRJrQZiTQ65WtMvwO",
-	"je8fqxKPdQVJiy1DM6Bc9Nb1",
-	"niV",
-	"9hFCW2R1",
-	"sHKHpe2i96",
-	"p7c5E6AcXQ/IJUuAEC9W6",
-	"",
-	"aRv9hjc9P+Pbn+u3krN6",
-	"BzStcgE8qVdqjEH16l4",
-	"SqgeZvL5j9zoHP95xWHt",
-	"zVof5yaJkPe3VFpadPof",
+	"SOP04dGzk0TNO7t7t9ekDbAmx+eq0OI1ovEx",
+	"nVBjhYiND4hZ2NCGyV5beamIr7k6ifAsAbl",
+	"Ddjpt5B/Cit6EDq2a6cXgxY9lkEIOw4yC1GDF28KrA",
+	"VVCogcmSNIVvgV6U+AochorydiSymi68YVNGiz",
+	"u5ujk5sM62gpJOsB/1Gu/zsfgfZO",
+	"dXYIiBOAHZgzSruaQ2Nhrqc2im",
+	"z5jUTBSIpBN9g4qSJGlidNAutX6",
+	"KJE2oveZ34du/g1tiimm",
 }
 
 var WebAlgorithms = []string{
@@ -52,17 +45,35 @@ var WebAlgorithms = []string{
 	"NhXXU9rg4XXdzo7u5o",
 }
 
+var PCAlgorithms = []string{
+	"KHBJ07an7ROXDoK7Db",
+	"G6n399rSWkl7WcQmw5rpQInurc1DkLmLJqE",
+	"JZD1A3M4x+jBFN62hkr7VDhkkZxb9g3rWqRZqFAAb",
+	"fQnw/AmSlbbI91Ik15gpddGgyU7U",
+	"/Dv9JdPYSj3sHiWjouR95NTQff",
+	"yGx2zuTjbWENZqecNI+edrQgqmZKP",
+	"ljrbSzdHLwbqcRn",
+	"lSHAsqCkGDGxQqqwrVu",
+	"TsWXI81fD1",
+	"vk7hBjawK/rOSrSWajtbMk95nfgf3",
+}
+
 const (
 	AndroidClientID      = "YNxT9w7GMdWvEOKa"
 	AndroidClientSecret  = "dbw2OtmVEeuUvIptb1Coyg"
-	AndroidClientVersion = "1.47.1"
+	AndroidClientVersion = "1.53.2"
 	AndroidPackageName   = "com.pikcloud.pikpak"
-	AndroidSdkVersion    = "2.0.4.204000"
+	AndroidSdkVersion    = "2.0.6.206003"
 	WebClientID          = "YUMx5nI8ZU8Ap8pm"
 	WebClientSecret      = "dbw2OtmVEeuUvIptb1Coyg"
 	WebClientVersion     = "2.0.0"
 	WebPackageName       = "mypikpak.com"
 	WebSdkVersion        = "8.0.3"
+	PCClientID           = "YvtoWO6GNHiuCl7x"
+	PCClientSecret       = "1NIH5R1IEe2pAxZE3hv3uA"
+	PCClientVersion      = "undefined" // 2.6.11.4955
+	PCPackageName        = "mypikpak.com"
+	PCSdkVersion         = "8.0.3"
 )
 
 func (d *PikPakShare) request(url string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
@@ -109,7 +120,7 @@ func (d *PikPakShare) getSharePassToken() error {
 		"limit":          "100",
 	}
 	var resp ShareResp
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/share", http.MethodGet, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/share", http.MethodGet, func(req *resty.Request) {
 		req.SetQueryParams(query)
 	}, &resp)
 	if err != nil {
@@ -137,7 +148,7 @@ func (d *PikPakShare) getFiles(id string) ([]File, error) {
 			"pass_code_token": d.PassCodeToken,
 		}
 		var resp ShareResp
-		_, err := d.request("https://api-drive.mypikpak.com/drive/v1/share/detail", http.MethodGet, func(req *resty.Request) {
+		_, err := d.request("https://api-drive.mypikpak.net/drive/v1/share/detail", http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(query)
 		}, &resp)
 		if err != nil {
@@ -294,7 +305,7 @@ func (d *PikPakShare) refreshCaptchaToken(action string, metas map[string]string
 	}
 	var e ErrResp
 	var resp CaptchaTokenResponse
-	_, err := d.request("https://user.mypikpak.com/v1/shield/captcha/init", http.MethodPost, func(req *resty.Request) {
+	_, err := d.request("https://user.mypikpak.net/v1/shield/captcha/init", http.MethodPost, func(req *resty.Request) {
 		req.SetError(&e).SetBody(param)
 	}, &resp)
 

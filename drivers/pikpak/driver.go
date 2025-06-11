@@ -12,7 +12,6 @@ import (
 	hash_extend "github.com/alist-org/alist/v3/pkg/utils/hash"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/oauth2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +23,6 @@ type PikPak struct {
 	*Common
 	RefreshToken string
 	AccessToken  string
-	oauth2Token  oauth2.TokenSource
 }
 
 func (d *PikPak) Config() driver.Config {
@@ -65,6 +63,13 @@ func (d *PikPak) Init(ctx context.Context) (err error) {
 		d.PackageName = WebPackageName
 		d.Algorithms = WebAlgorithms
 		d.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+	} else if d.Platform == "pc" {
+		d.ClientID = PCClientID
+		d.ClientSecret = PCClientSecret
+		d.ClientVersion = PCClientVersion
+		d.PackageName = PCPackageName
+		d.Algorithms = PCAlgorithms
+		d.UserAgent = "MainWindow Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) PikPak/2.6.11.4955 Chrome/100.0.4896.160 Electron/18.3.15 Safari/537.36"
 	}
 
 	if d.Addition.CaptchaToken != "" && d.Addition.RefreshToken == "" {
@@ -77,56 +82,24 @@ func (d *PikPak) Init(ctx context.Context) (err error) {
 		d.Addition.DeviceID = d.Common.DeviceID
 		op.MustSaveDriverStorage(d)
 	}
-	// 初始化 oauth2Config
-	oauth2Config := &oauth2.Config{
-		ClientID:     d.ClientID,
-		ClientSecret: d.ClientSecret,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:   "https://user.mypikpak.com/v1/auth/signin",
-			TokenURL:  "https://user.mypikpak.com/v1/auth/token",
-			AuthStyle: oauth2.AuthStyleInParams,
-		},
-	}
-
 	// 如果已经有RefreshToken，直接获取AccessToken
 	if d.Addition.RefreshToken != "" {
-		// 使用 oauth2 刷新令牌
-		// 初始化 oauth2Token
-		d.oauth2Token = oauth2.ReuseTokenSource(nil, utils.TokenSource(func() (*oauth2.Token, error) {
-			return oauth2Config.TokenSource(ctx, &oauth2.Token{
-				RefreshToken: d.Addition.RefreshToken,
-			}).Token()
-		}))
-	} else {
-		// 如果没有填写RefreshToken，尝试登录 获取 refreshToken
-		if err := d.login(); err != nil {
+		if err = d.refreshToken(d.Addition.RefreshToken); err != nil {
 			return err
 		}
-		d.oauth2Token = oauth2.ReuseTokenSource(nil, utils.TokenSource(func() (*oauth2.Token, error) {
-			return oauth2Config.TokenSource(ctx, &oauth2.Token{
-				RefreshToken: d.RefreshToken,
-			}).Token()
-		}))
+	} else {
+		// 如果没有填写RefreshToken，尝试登录 获取 refreshToken
+		if err = d.login(); err != nil {
+			return err
+		}
 	}
-
-	token, err := d.oauth2Token.Token()
-	if err != nil {
-		return err
-	}
-	d.RefreshToken = token.RefreshToken
-	d.AccessToken = token.AccessToken
 
 	// 获取CaptchaToken
-	err = d.RefreshCaptchaTokenAtLogin(GetAction(http.MethodGet, "https://api-drive.mypikpak.com/drive/v1/files"), d.Username)
+	err = d.RefreshCaptchaTokenAtLogin(GetAction(http.MethodGet, "https://api-drive.mypikpak.net/drive/v1/files"), d.Common.GetUserID())
 	if err != nil {
 		return err
 	}
 
-	// 获取用户ID
-	userID := token.Extra("sub").(string)
-	if userID != "" {
-		d.Common.SetUserID(userID)
-	}
 	// 更新UserAgent
 	if d.Platform == "android" {
 		d.Common.UserAgent = BuildCustomUserAgent(utils.GetMD5EncodeStr(d.Username+d.Password), AndroidClientID, AndroidPackageName, AndroidSdkVersion, AndroidClientVersion, AndroidPackageName, d.Common.UserID)
@@ -135,6 +108,7 @@ func (d *PikPak) Init(ctx context.Context) (err error) {
 	// 保存 有效的 RefreshToken
 	d.Addition.RefreshToken = d.RefreshToken
 	op.MustSaveDriverStorage(d)
+
 	return nil
 }
 
@@ -154,6 +128,7 @@ func (d *PikPak) List(ctx context.Context, dir model.Obj, args model.ListArgs) (
 
 func (d *PikPak) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp File
+	var url string
 	queryParams := map[string]string{
 		"_magic":         "2021",
 		"usage":          "FETCH",
@@ -162,25 +137,27 @@ func (d *PikPak) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 	if !d.DisableMediaLink {
 		queryParams["usage"] = "CACHE"
 	}
-	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.com/drive/v1/files/%s", file.GetID()),
+	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
 		http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(queryParams)
 		}, &resp)
 	if err != nil {
 		return nil, err
 	}
-	link := model.Link{
-		URL: resp.WebContentLink,
-	}
+	url = resp.WebContentLink
+
 	if !d.DisableMediaLink && len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
 		log.Debugln("use media link")
-		link.URL = resp.Medias[0].Link.Url
+		url = resp.Medias[0].Link.Url
 	}
-	return &link, nil
+
+	return &model.Link{
+		URL: url,
+	}, nil
 }
 
 func (d *PikPak) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/files", http.MethodPost, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(base.Json{
 			"kind":      "drive#folder",
 			"parent_id": parentDir.GetID(),
@@ -191,7 +168,7 @@ func (d *PikPak) MakeDir(ctx context.Context, parentDir model.Obj, dirName strin
 }
 
 func (d *PikPak) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/files:batchMove", http.MethodPost, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchMove", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(base.Json{
 			"ids": []string{srcObj.GetID()},
 			"to": base.Json{
@@ -203,7 +180,7 @@ func (d *PikPak) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *PikPak) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/files/"+srcObj.GetID(), http.MethodPatch, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files/"+srcObj.GetID(), http.MethodPatch, func(req *resty.Request) {
 		req.SetBody(base.Json{
 			"name": newName,
 		})
@@ -212,7 +189,7 @@ func (d *PikPak) Rename(ctx context.Context, srcObj model.Obj, newName string) e
 }
 
 func (d *PikPak) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/files:batchCopy", http.MethodPost, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchCopy", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(base.Json{
 			"ids": []string{srcObj.GetID()},
 			"to": base.Json{
@@ -224,7 +201,7 @@ func (d *PikPak) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *PikPak) Remove(ctx context.Context, obj model.Obj) error {
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/files:batchTrash", http.MethodPost, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchTrash", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(base.Json{
 			"ids": []string{obj.GetID()},
 		})
@@ -248,7 +225,7 @@ func (d *PikPak) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 	}
 
 	var resp UploadTaskData
-	res, err := d.request("https://api-drive.mypikpak.com/drive/v1/files", http.MethodPost, func(req *resty.Request) {
+	res, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(base.Json{
 			"kind":        "drive#file",
 			"name":        stream.GetName(),
@@ -272,16 +249,16 @@ func (d *PikPak) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 
 	params := resp.Resumable.Params
 	//endpoint := strings.Join(strings.Split(params.Endpoint, ".")[1:], ".")
-	// web 端上传 返回的endpoint 为 `mypikpak.com` | android 端上传 返回的endpoint 为 `vip-lixian-07.mypikpak.com`·
+	// web 端上传 返回的endpoint 为 `mypikpak.net` | android 端上传 返回的endpoint 为 `vip-lixian-07.mypikpak.net`·
 	if d.Addition.Platform == "android" {
-		params.Endpoint = "mypikpak.com"
+		params.Endpoint = "mypikpak.net"
 	}
 
 	if stream.GetSize() <= 10*utils.MB { // 文件大小 小于10MB，改用普通模式上传
-		return d.UploadByOSS(&params, stream, up)
+		return d.UploadByOSS(ctx, &params, stream, up)
 	}
 	// 分片上传
-	return d.UploadByMultipart(&params, stream.GetSize(), stream, up)
+	return d.UploadByMultipart(ctx, &params, stream.GetSize(), stream, up)
 }
 
 // 离线下载文件
@@ -298,7 +275,7 @@ func (d *PikPak) OfflineDownload(ctx context.Context, fileUrl string, parentDir 
 	}
 
 	var resp OfflineDownloadResp
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/files", http.MethodPost, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(requestBody)
 	}, &resp)
 
@@ -316,7 +293,7 @@ PHASE_TYPE_RUNNING, PHASE_TYPE_ERROR, PHASE_TYPE_COMPLETE, PHASE_TYPE_PENDING
 */
 func (d *PikPak) OfflineList(ctx context.Context, nextPageToken string, phase []string) ([]OfflineTask, error) {
 	res := make([]OfflineTask, 0)
-	url := "https://api-drive.mypikpak.com/drive/v1/tasks"
+	url := "https://api-drive.mypikpak.net/drive/v1/tasks"
 
 	if len(phase) == 0 {
 		phase = []string{"PHASE_TYPE_RUNNING", "PHASE_TYPE_ERROR", "PHASE_TYPE_COMPLETE", "PHASE_TYPE_PENDING"}
@@ -357,7 +334,7 @@ func (d *PikPak) OfflineList(ctx context.Context, nextPageToken string, phase []
 }
 
 func (d *PikPak) DeleteOfflineTasks(ctx context.Context, taskIDs []string, deleteFiles bool) error {
-	url := "https://api-drive.mypikpak.com/drive/v1/tasks"
+	url := "https://api-drive.mypikpak.net/drive/v1/tasks"
 	params := map[string]string{
 		"task_ids":     strings.Join(taskIDs, ","),
 		"delete_files": strconv.FormatBool(deleteFiles),

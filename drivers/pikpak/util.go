@@ -2,47 +2,40 @@ package pikpak
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"github.com/alist-org/alist/v3/internal/driver"
-	"github.com/alist-org/alist/v3/internal/model"
-	"github.com/alist-org/alist/v3/internal/op"
-	"github.com/alist-org/alist/v3/pkg/utils"
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	jsoniter "github.com/json-iterator/go"
-	"github.com/pkg/errors"
 	"io"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alist-org/alist/v3/drivers/base"
+	"github.com/alist-org/alist/v3/internal/driver"
+	"github.com/alist-org/alist/v3/internal/model"
+	"github.com/alist-org/alist/v3/internal/op"
+	"github.com/alist-org/alist/v3/pkg/utils"
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
+	jsoniter "github.com/json-iterator/go"
+	"github.com/pkg/errors"
 )
 
-// do others that not defined in Driver interface
-
 var AndroidAlgorithms = []string{
-	"Gez0T9ijiI9WCeTsKSg3SMlx",
-	"zQdbalsolyb1R/",
-	"ftOjr52zt51JD68C3s",
-	"yeOBMH0JkbQdEFNNwQ0RI9T3wU/v",
-	"BRJrQZiTQ65WtMvwO",
-	"je8fqxKPdQVJiy1DM6Bc9Nb1",
-	"niV",
-	"9hFCW2R1",
-	"sHKHpe2i96",
-	"p7c5E6AcXQ/IJUuAEC9W6",
-	"",
-	"aRv9hjc9P+Pbn+u3krN6",
-	"BzStcgE8qVdqjEH16l4",
-	"SqgeZvL5j9zoHP95xWHt",
-	"zVof5yaJkPe3VFpadPof",
+	"SOP04dGzk0TNO7t7t9ekDbAmx+eq0OI1ovEx",
+	"nVBjhYiND4hZ2NCGyV5beamIr7k6ifAsAbl",
+	"Ddjpt5B/Cit6EDq2a6cXgxY9lkEIOw4yC1GDF28KrA",
+	"VVCogcmSNIVvgV6U+AochorydiSymi68YVNGiz",
+	"u5ujk5sM62gpJOsB/1Gu/zsfgfZO",
+	"dXYIiBOAHZgzSruaQ2Nhrqc2im",
+	"z5jUTBSIpBN9g4qSJGlidNAutX6",
+	"KJE2oveZ34du/g1tiimm",
 }
 
 var WebAlgorithms = []string{
@@ -63,6 +56,19 @@ var WebAlgorithms = []string{
 	"NhXXU9rg4XXdzo7u5o",
 }
 
+var PCAlgorithms = []string{
+	"KHBJ07an7ROXDoK7Db",
+	"G6n399rSWkl7WcQmw5rpQInurc1DkLmLJqE",
+	"JZD1A3M4x+jBFN62hkr7VDhkkZxb9g3rWqRZqFAAb",
+	"fQnw/AmSlbbI91Ik15gpddGgyU7U",
+	"/Dv9JdPYSj3sHiWjouR95NTQff",
+	"yGx2zuTjbWENZqecNI+edrQgqmZKP",
+	"ljrbSzdHLwbqcRn",
+	"lSHAsqCkGDGxQqqwrVu",
+	"TsWXI81fD1",
+	"vk7hBjawK/rOSrSWajtbMk95nfgf3",
+}
+
 const (
 	OSSUserAgent               = "aliyun-sdk-android/2.9.13(Linux/Android 14/M2004j7ac;UKQ1.231108.001)"
 	OssSecurityTokenHeaderName = "X-OSS-Security-Token"
@@ -72,18 +78,28 @@ const (
 const (
 	AndroidClientID      = "YNxT9w7GMdWvEOKa"
 	AndroidClientSecret  = "dbw2OtmVEeuUvIptb1Coyg"
-	AndroidClientVersion = "1.47.1"
+	AndroidClientVersion = "1.53.2"
 	AndroidPackageName   = "com.pikcloud.pikpak"
-	AndroidSdkVersion    = "2.0.4.204000"
+	AndroidSdkVersion    = "2.0.6.206003"
 	WebClientID          = "YUMx5nI8ZU8Ap8pm"
 	WebClientSecret      = "dbw2OtmVEeuUvIptb1Coyg"
 	WebClientVersion     = "2.0.0"
 	WebPackageName       = "mypikpak.com"
 	WebSdkVersion        = "8.0.3"
+	PCClientID           = "YvtoWO6GNHiuCl7x"
+	PCClientSecret       = "1NIH5R1IEe2pAxZE3hv3uA"
+	PCClientVersion      = "undefined" // 2.6.11.4955
+	PCPackageName        = "mypikpak.com"
+	PCSdkVersion         = "8.0.3"
 )
 
 func (d *PikPak) login() error {
-	url := "https://user.mypikpak.com/v1/auth/signin"
+	// 检查用户名和密码是否为空
+	if d.Addition.Username == "" || d.Addition.Password == "" {
+		return errors.New("username or password is empty")
+	}
+
+	url := "https://user.mypikpak.net/v1/auth/signin"
 	// 使用 用户填写的 CaptchaToken —————— (验证后的captcha_token)
 	if d.GetCaptchaToken() == "" {
 		if err := d.RefreshCaptchaTokenInLogin(GetAction(http.MethodPost, url), d.Username); err != nil {
@@ -112,39 +128,44 @@ func (d *PikPak) login() error {
 	return nil
 }
 
-//func (d *PikPak) refreshToken() error {
-//	url := "https://user.mypikpak.com/v1/auth/token"
-//	var e ErrResp
-//	res, err := base.RestyClient.SetRetryCount(1).R().SetError(&e).
-//		SetHeader("user-agent", "").SetBody(base.Json{
-//		"client_id":     ClientID,
-//		"client_secret": ClientSecret,
-//		"grant_type":    "refresh_token",
-//		"refresh_token": d.RefreshToken,
-//	}).SetQueryParam("client_id", ClientID).Post(url)
-//	if err != nil {
-//		d.Status = err.Error()
-//		op.MustSaveDriverStorage(d)
-//		return err
-//	}
-//	if e.ErrorCode != 0 {
-//		if e.ErrorCode == 4126 {
-//			// refresh_token invalid, re-login
-//			return d.login()
-//		}
-//		d.Status = e.Error()
-//		op.MustSaveDriverStorage(d)
-//		return errors.New(e.Error())
-//	}
-//	data := res.Body()
-//	d.Status = "work"
-//	d.RefreshToken = jsoniter.Get(data, "refresh_token").ToString()
-//	d.AccessToken = jsoniter.Get(data, "access_token").ToString()
-//	d.Common.SetUserID(jsoniter.Get(data, "sub").ToString())
-//	d.Addition.RefreshToken = d.RefreshToken
-//	op.MustSaveDriverStorage(d)
-//	return nil
-//}
+func (d *PikPak) refreshToken(refreshToken string) error {
+	url := "https://user.mypikpak.net/v1/auth/token"
+	var e ErrResp
+	res, err := base.RestyClient.SetRetryCount(1).R().SetError(&e).
+		SetHeader("user-agent", "").SetBody(base.Json{
+		"client_id":     d.ClientID,
+		"client_secret": d.ClientSecret,
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+	}).SetQueryParam("client_id", d.ClientID).Post(url)
+	if err != nil {
+		d.Status = err.Error()
+		op.MustSaveDriverStorage(d)
+		return err
+	}
+	if e.ErrorCode != 0 {
+		if e.ErrorCode == 4126 {
+			// 1. 未填写 username 或 password
+			if d.Addition.Username == "" || d.Addition.Password == "" {
+				return errors.New("refresh_token invalid, please re-provide refresh_token")
+			} else {
+				// refresh_token invalid, re-login
+				return d.login()
+			}
+		}
+		d.Status = e.Error()
+		op.MustSaveDriverStorage(d)
+		return errors.New(e.Error())
+	}
+	data := res.Body()
+	d.Status = "work"
+	d.RefreshToken = jsoniter.Get(data, "refresh_token").ToString()
+	d.AccessToken = jsoniter.Get(data, "access_token").ToString()
+	d.Common.SetUserID(jsoniter.Get(data, "sub").ToString())
+	d.Addition.RefreshToken = d.RefreshToken
+	op.MustSaveDriverStorage(d)
+	return nil
+}
 
 func (d *PikPak) request(url string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	req := base.RestyClient.R()
@@ -154,13 +175,8 @@ func (d *PikPak) request(url string, method string, callback base.ReqCallback, r
 		"X-Device-ID":     d.GetDeviceID(),
 		"X-Captcha-Token": d.GetCaptchaToken(),
 	})
-	if d.oauth2Token != nil {
-		// 使用oauth2 获取 access_token
-		token, err := d.oauth2Token.Token()
-		if err != nil {
-			return nil, err
-		}
-		req.SetAuthScheme(token.TokenType).SetAuthToken(token.AccessToken)
+	if d.AccessToken != "" {
+		req.SetHeader("Authorization", "Bearer "+d.AccessToken)
 	}
 
 	if callback != nil {
@@ -181,22 +197,12 @@ func (d *PikPak) request(url string, method string, callback base.ReqCallback, r
 		return res.Body(), nil
 	case 4122, 4121, 16:
 		// access_token 过期
-
-		//if err1 := d.refreshToken(); err1 != nil {
-		//	return nil, err1
-		//}
-		t, err := d.oauth2Token.Token()
-		if err != nil {
-			return nil, err
+		if err1 := d.refreshToken(d.RefreshToken); err1 != nil {
+			return nil, err1
 		}
-		d.AccessToken = t.AccessToken
-		d.RefreshToken = t.RefreshToken
-		d.Addition.RefreshToken = t.RefreshToken
-		op.MustSaveDriverStorage(d)
-
 		return d.request(url, method, callback, resp)
 	case 9: // 验证码token过期
-		if err = d.RefreshCaptchaTokenAtLogin(GetAction(method, url), d.Common.UserID); err != nil {
+		if err = d.RefreshCaptchaTokenAtLogin(GetAction(method, url), d.GetUserID()); err != nil {
 			return nil, err
 		}
 		return d.request(url, method, callback, resp)
@@ -223,7 +229,7 @@ func (d *PikPak) getFiles(id string) ([]File, error) {
 			"page_token":     pageToken,
 		}
 		var resp Files
-		_, err := d.request("https://api-drive.mypikpak.com/drive/v1/files", http.MethodGet, func(req *resty.Request) {
+		_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(query)
 		}, &resp)
 		if err != nil {
@@ -337,6 +343,10 @@ func (c *Common) GetDeviceID() string {
 	return c.DeviceID
 }
 
+func (c *Common) GetUserID() string {
+	return c.UserID
+}
+
 // RefreshCaptchaTokenAtLogin 刷新验证码token(登录后)
 func (d *PikPak) RefreshCaptchaTokenAtLogin(action, userID string) error {
 	metas := map[string]string{
@@ -384,7 +394,7 @@ func (d *PikPak) refreshCaptchaToken(action string, metas map[string]string) err
 	}
 	var e ErrResp
 	var resp CaptchaTokenResponse
-	_, err := d.request("https://user.mypikpak.com/v1/shield/captcha/init", http.MethodPost, func(req *resty.Request) {
+	_, err := d.request("https://user.mypikpak.net/v1/shield/captcha/init", http.MethodPost, func(req *resty.Request) {
 		req.SetError(&e).SetBody(param).SetQueryParam("client_id", d.ClientID)
 	}, &resp)
 
@@ -407,7 +417,7 @@ func (d *PikPak) refreshCaptchaToken(action string, metas map[string]string) err
 	return nil
 }
 
-func (d *PikPak) UploadByOSS(params *S3Params, stream model.FileStreamer, up driver.UpdateProgress) error {
+func (d *PikPak) UploadByOSS(ctx context.Context, params *S3Params, s model.FileStreamer, up driver.UpdateProgress) error {
 	ossClient, err := oss.New(params.Endpoint, params.AccessKeyID, params.AccessKeySecret)
 	if err != nil {
 		return err
@@ -417,14 +427,17 @@ func (d *PikPak) UploadByOSS(params *S3Params, stream model.FileStreamer, up dri
 		return err
 	}
 
-	err = bucket.PutObject(params.Key, stream, OssOption(params)...)
+	err = bucket.PutObject(params.Key, driver.NewLimitedUploadStream(ctx, &driver.ReaderUpdatingProgress{
+		Reader:         s,
+		UpdateProgress: up,
+	}), OssOption(params)...)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (d *PikPak) UploadByMultipart(params *S3Params, fileSize int64, stream model.FileStreamer, up driver.UpdateProgress) error {
+func (d *PikPak) UploadByMultipart(ctx context.Context, params *S3Params, fileSize int64, s model.FileStreamer, up driver.UpdateProgress) error {
 	var (
 		chunks    []oss.FileChunk
 		parts     []oss.UploadPart
@@ -434,7 +447,7 @@ func (d *PikPak) UploadByMultipart(params *S3Params, fileSize int64, stream mode
 		err       error
 	)
 
-	tmpF, err := stream.CacheFullInTempFile()
+	tmpF, err := s.CacheFullInTempFile()
 	if err != nil {
 		return err
 	}
@@ -478,6 +491,7 @@ func (d *PikPak) UploadByMultipart(params *S3Params, fileSize int64, stream mode
 		quit <- struct{}{}
 	}()
 
+	completedNum := atomic.Int32{}
 	// consumers
 	for i := 0; i < ThreadsNum; i++ {
 		go func(threadId int) {
@@ -490,6 +504,8 @@ func (d *PikPak) UploadByMultipart(params *S3Params, fileSize int64, stream mode
 				var part oss.UploadPart // 出现错误就继续尝试，共尝试3次
 				for retry := 0; retry < 3; retry++ {
 					select {
+					case <-ctx.Done():
+						break
 					case <-ticker.C:
 						errCh <- errors.Wrap(err, "ossToken 过期")
 					default:
@@ -500,13 +516,16 @@ func (d *PikPak) UploadByMultipart(params *S3Params, fileSize int64, stream mode
 						continue
 					}
 
-					b := bytes.NewBuffer(buf)
+					b := driver.NewLimitedUploadStream(ctx, bytes.NewReader(buf))
 					if part, err = bucket.UploadPart(imur, b, chunk.Size, chunk.Number, OssOption(params)...); err == nil {
 						break
 					}
 				}
 				if err != nil {
-					errCh <- errors.Wrap(err, fmt.Sprintf("上传 %s 的第%d个分片时出现错误：%v", stream.GetName(), chunk.Number, err))
+					errCh <- errors.Wrap(err, fmt.Sprintf("上传 %s 的第%d个分片时出现错误：%v", s.GetName(), chunk.Number, err))
+				} else {
+					num := completedNum.Add(1)
+					up(float64(num) * 100.0 / float64(len(chunks)))
 				}
 				UploadedPartsCh <- part
 			}
@@ -537,7 +556,7 @@ LOOP:
 	// EOF错误是xml的Unmarshal导致的，响应其实是json格式，所以实际上上传是成功的
 	if _, err = bucket.CompleteMultipartUpload(imur, parts, OssOption(params)...); err != nil && !errors.Is(err, io.EOF) {
 		// 当文件名含有 &< 这两个字符之一时响应的xml解析会出现错误，实际上上传是成功的
-		if filename := filepath.Base(stream.GetName()); !strings.ContainsAny(filename, "&<") {
+		if filename := filepath.Base(s.GetName()); !strings.ContainsAny(filename, "&<") {
 			return err
 		}
 	}

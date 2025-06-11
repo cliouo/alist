@@ -60,10 +60,17 @@ func (d *PikPakShare) Init(ctx context.Context) error {
 		d.PackageName = WebPackageName
 		d.Algorithms = WebAlgorithms
 		d.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+	} else if d.Platform == "pc" {
+		d.ClientID = PCClientID
+		d.ClientSecret = PCClientSecret
+		d.ClientVersion = PCClientVersion
+		d.PackageName = PCPackageName
+		d.Algorithms = PCAlgorithms
+		d.UserAgent = "MainWindow Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) PikPak/2.6.11.4955 Chrome/100.0.4896.160 Electron/18.3.15 Safari/537.36"
 	}
 
 	// 获取CaptchaToken
-	err := d.RefreshCaptchaToken(GetAction(http.MethodGet, "https://api-drive.mypikpak.com/drive/v1/share:batch_file_info"), "")
+	err := d.RefreshCaptchaToken(GetAction(http.MethodGet, "https://api-drive.mypikpak.net/drive/v1/share:batch_file_info"), "")
 	if err != nil {
 		return err
 	}
@@ -71,6 +78,7 @@ func (d *PikPakShare) Init(ctx context.Context) error {
 	if d.SharePwd != "" {
 		return d.getSharePassToken()
 	}
+
 	return nil
 }
 
@@ -95,7 +103,7 @@ func (d *PikPakShare) Link(ctx context.Context, file model.Obj, args model.LinkA
 		"file_id":         file.GetID(),
 		"pass_code_token": d.PassCodeToken,
 	}
-	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/share/file_info", http.MethodGet, func(req *resty.Request) {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/share/file_info", http.MethodGet, func(req *resty.Request) {
 		req.SetQueryParams(query)
 	}, &resp)
 	if err != nil {
@@ -112,10 +120,10 @@ func (d *PikPakShare) Link(ctx context.Context, file model.Obj, args model.LinkA
 		}
 
 	}
-	link := model.Link{
+
+	return &model.Link{
 		URL: downloadUrl,
-	}
-	return &link, nil
+	}, nil
 }
 
 var _ driver.Driver = (*PikPakShare)(nil)
